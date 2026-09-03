@@ -3,6 +3,9 @@ package com.br.dadosFuncionarios.dadosDeFuncionarios.Processors;
 import com.br.dadosFuncionarios.dadosDeFuncionarios.Dominios.Item;
 import com.br.dadosFuncionarios.dadosDeFuncionarios.Dominios.Pedido;
 import org.springframework.batch.infrastructure.item.ItemProcessor;
+import org.springframework.batch.infrastructure.item.support.ClassifierCompositeItemProcessor;
+import org.springframework.batch.infrastructure.item.support.builder.ClassifierCompositeItemProcessorBuilder;
+import org.springframework.batch.infrastructure.item.support.builder.CompositeItemProcessorBuilder;
 import org.springframework.batch.infrastructure.item.validator.ValidatingItemProcessor;
 import org.springframework.batch.infrastructure.item.validator.ValidationException;
 import org.springframework.batch.infrastructure.item.validator.Validator;
@@ -10,9 +13,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 import java.math.BigDecimal;
-import java.util.ArrayList;
 import java.util.HashSet;
-import java.util.List;
 import java.util.Set;
 
 @Configuration
@@ -20,13 +21,39 @@ public class pedidosProcessorConfig {
 
     private Set<String> codigo = new HashSet<>();
     private Set<String> nomePedido = new HashSet<>();
-    private List<Pedido> pedidos = new ArrayList<>();
+
 
     @Bean
+    public ItemProcessor<Object, Object> processorComposite() throws Exception {
+        //agrupa os processor de pedidos
+        ItemProcessor<Object, Object> processarPedidos = new CompositeItemProcessorBuilder<>()
+                .delegates(pedidoVerificacaoValor(), validacaoEntrega(), pedidosProcessor())
+                .build();
+        //agrupa os processor de itens
+        ItemProcessor<Object, Object> processarItens = new CompositeItemProcessorBuilder<>()
+                .delegates(itemProcessorNoDuplicates())
+                .build();
+
+        //decide, em tempo de execução, qual dos dois grupos acima deve processar o objeto atual
+        ClassifierCompositeItemProcessor<Object, Object> classifier = new ClassifierCompositeItemProcessor<>();
+        classifier.setClassifier(objeto -> {
+            if (objeto instanceof Item) {
+                return processarItens;
+            } else if (objeto instanceof Pedido) {
+                return processarPedidos;
+            }
+            // se nao tiver nem pedido nem item nao quebra o job
+            return objeto2 -> objeto2;
+        });
+
+        return classifier;
+    }
+    @Bean
     //verifica se todos os pedidos não tiveram duplicações
-    public ItemProcessor<Pedido, Pedido> pedidosProcessor() {
+    public ItemProcessor<Pedido, Pedido> pedidosProcessor() throws Exception {
         ValidatingItemProcessor<Pedido> processor = new ValidatingItemProcessor<>();
         processor.setFilter(true);
+        processor.afterPropertiesSet();
         processor.setValidator(validator());
         return processor;
     }
@@ -46,9 +73,10 @@ public class pedidosProcessorConfig {
 
 
     //verifica se todos os itens foram processados sem duplicações
-    public ItemProcessor<Item, Item> itemProcessor() {
+    public ItemProcessor<Item, Item> itemProcessorNoDuplicates() throws Exception {
         ValidatingItemProcessor<Item> processor = new ValidatingItemProcessor<>();
         processor.setFilter(true);
+        processor.afterPropertiesSet();
         processor.setValidator(validatorItem());
         return processor;
     }
@@ -67,9 +95,10 @@ public class pedidosProcessorConfig {
     }
 
     //Verifica se todos os pedidos tem status como entregue
-    public ItemProcessor<Pedido, Pedido> validacaoEntrega() {
+    public ItemProcessor<Pedido, Pedido> validacaoEntrega() throws Exception {
         ValidatingItemProcessor<Pedido> processor = new ValidatingItemProcessor<>();
         processor.setFilter(true);
+        processor.afterPropertiesSet();
         processor.setValidator(validateEntrega());
         return processor;
 
@@ -80,16 +109,18 @@ public class pedidosProcessorConfig {
         return new  Validator<Pedido>() {
             @Override
             public void validate(Pedido pedido) throws ValidationException {
-                if (!"ENTREGUE".equals(pedido.getEstado())) {
+                if (!"ENTREGUE".equals(pedido.getStatus())) {
                     throw new ValidationException("Os pedidos só seram validados se o status estiver como 'ENTREGUE'");
                 }
             }
         };
     }
 
-    public ItemProcessor<Pedido, Pedido> pedidoVerificacaoValor() {
+    //verifica se o valor é maior que 0
+    public ItemProcessor<Pedido, Pedido> pedidoVerificacaoValor() throws Exception {
         ValidatingItemProcessor processor = new ValidatingItemProcessor<>();
         processor.setFilter(true);
+        processor.afterPropertiesSet();
         processor.setValidator(validateValor());
         return processor;
     }
